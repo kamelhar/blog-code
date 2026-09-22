@@ -1,0 +1,36 @@
+# Advertises the GB10 GPU as nvidia.com/gpu. Time-slicing lets vLLM, speech-to-text and
+# text-to-speech share the one GPU (they share its unified memory; each workload keeps its own
+# memory budget in its flags).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: spark-nvidia-device-plugin
+  namespace: argocd
+  labels:
+    kamelhar.net/cluster: spark
+    kamelhar.net/env: platform
+    kamelhar.net/app: nvidia-device-plugin
+spec:
+  project: platform
+  source:
+    repoURL: https://nvidia.github.io/k8s-device-plugin
+    chart: nvidia-device-plugin
+    targetRevision: 0.20.0
+    helm:
+      releaseName: nvidia-device-plugin
+      values: |
+        runtimeClassName: nvidia
+        config:
+          default: default
+          map:
+            default: |-
+              version: v1
+              sharing:
+                timeSlicing:
+                  resources:
+                    - name: nvidia.com/gpu
+                      replicas: 4
+  destination: {name: spark, namespace: platform}
+  syncPolicy:
+    automated: {prune: true, selfHeal: true}
+    syncOptions: [ServerSideApply=true]

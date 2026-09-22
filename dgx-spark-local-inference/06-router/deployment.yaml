@@ -1,0 +1,60 @@
+# One LiteLLM router in front of the Spark's single vLLM. Host networking,
+# bound to loopback only: the Spark's Caddy publishes it by name, and it reaches vLLM on
+# 127.0.0.1:8000. Overlays set the name suffix, port, config and keys.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-router
+  labels: {app: llm-router}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app: llm-router}
+  template:
+    metadata:
+      labels: {app: llm-router}
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      # The namespace is privileged because of the host networking, not because anything here
+      # needs to be root: proven with the image as uid 1000 -- litellm starts, /tmp is writable,
+      # /app is read-only and it writes nothing there. Held to what every prod container is.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: litellm
+          # The digest the Spark's Docker router runs today.
+          image: ghcr.io/berriai/litellm@sha256:468c25f35f3e5ec4e414974f00deab93337b1b4d9953cabcfd3722e59415f834
+          args: [--config, /app/config.yaml, --host, 127.0.0.1, --port, "PORT"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          envFrom:
+            - secretRef: {name: llm-router-env}
+          readinessProbe:
+            exec:
+              command: [python, -c, "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.environ['ROUTER_PORT'] + '/health/liveliness', timeout=3)"]
+            periodSeconds: 15
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command: [python, -c, "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.environ['ROUTER_PORT'] + '/health/liveliness', timeout=3)"]
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 4
+          env:
+            - {name: ROUTER_PORT, value: "PORT"}
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+            limits: {memory: 2Gi}
+          volumeMounts:
+            - {name: config, mountPath: /app/config.yaml, subPath: config.yaml, readOnly: true}
+      volumes:
+        - name: config
+          configMap: {name: llm-router-config}

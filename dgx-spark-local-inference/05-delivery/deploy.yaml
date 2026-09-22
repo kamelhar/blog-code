@@ -1,0 +1,8 @@
+# What Argo calls this overlay, and where it runs. The ApplicationSets in
+# bootstrap/hub read every one of these; an overlay with no deploy.yaml is not
+# deployed, which is how an overlay that needs a hand-written Application opts out.
+name: vllm
+project: inference
+cluster: spark
+env: shared
+namespace: inference
