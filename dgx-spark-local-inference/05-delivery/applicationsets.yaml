@@ -1,0 +1,92 @@
+# Every app overlay becomes an Application, without a file per app per environment.
+#
+# Until now each rung of each app's ladder was a hand-written Application in clusters/<cluster>/apps
+# -- 34 files that said the same five things in the same order, and four places to edit to add an
+# app. What an app deploys is already written down in apps/<app>/overlays/<env>: these generate the
+# Application from it, so a new app is a directory and a five-line deploy.yaml, and a new rung is a
+# directory.
+#
+#   apps/<app>/overlays/<env>/deploy.yaml    name, project, cluster, env, namespace
+#
+# An overlay with no deploy.yaml is not deployed. That is the opt-out for an Application that needs
+# something these do not template -- apps/vllm/overlays/spark-dev keeps its own file because it
+# ignores /spec/replicas, which is scaled by hand on the Spark.
+#
+# Two sets rather than one conditional: the hub deploys into itself by server address, the other
+# clusters by the name they were registered under (cluster/register-cluster.sh). A template with no
+# branches in it is one that can be rendered by ci/tests/test_appset.py and compared, line for line,
+# against the Applications these replace -- which is how this was proven before it was merged.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: apps-hub
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  # Keep a hand pause on a generated Application, as the minecraft tenants do: without this the
+  # controller removes the annotation and self-heal undoes whatever it was paused for.
+  preservedFields:
+    annotations: [argocd.argoproj.io/skip-reconcile]
+  generators:
+    - git:
+        repoURL: https://github.com/YOUR-ORG/YOUR-GITOPS-REPO.git
+        revision: main
+        files:
+          - path: apps/*/overlays/prod/deploy.yaml
+  template:
+    metadata:
+      name: '{{ .name }}'
+      labels:
+        kamelhar.net/cluster: '{{ .cluster }}'
+        kamelhar.net/env: '{{ .env }}'
+        kamelhar.net/app: '{{ index .path.segments 1 }}'
+    spec:
+      project: '{{ .project }}'
+      source:
+        repoURL: https://github.com/YOUR-ORG/YOUR-GITOPS-REPO.git
+        targetRevision: main
+        path: '{{ .path.path }}'
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: '{{ .namespace }}'
+      syncPolicy:
+        automated: {prune: true, selfHeal: true}
+        syncOptions: [ServerSideApply=true]
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: apps-clusters
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  preservedFields:
+    annotations: [argocd.argoproj.io/skip-reconcile]
+  generators:
+    - git:
+        repoURL: https://github.com/YOUR-ORG/YOUR-GITOPS-REPO.git
+        revision: main
+        files:
+          - path: apps/*/overlays/lab-*/deploy.yaml
+          - path: apps/*/overlays/spark*/deploy.yaml
+  template:
+    metadata:
+      name: '{{ .name }}'
+      labels:
+        kamelhar.net/cluster: '{{ .cluster }}'
+        kamelhar.net/env: '{{ .env }}'
+        kamelhar.net/app: '{{ index .path.segments 1 }}'
+    spec:
+      project: '{{ .project }}'
+      source:
+        repoURL: https://github.com/YOUR-ORG/YOUR-GITOPS-REPO.git
+        targetRevision: main
+        path: '{{ .path.path }}'
+      destination:
+        name: '{{ .cluster }}'
+        namespace: '{{ .namespace }}'
+      syncPolicy:
+        automated: {prune: true, selfHeal: true}
+        syncOptions: [ServerSideApply=true]
