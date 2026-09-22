@@ -1,0 +1,21 @@
+{{!< default}}
+{{#post}}
+<article>
+  {{#if @page.show_title_and_feature_image}}
+    <div class="col head"><h1 class="title">{{title}}</h1></div>
+  {{/if}}
+  {{!-- A page's feature image is a portrait of whoever the page is about, not a
+        banner: 104px, round, sharing the column's right edge. The bespoke site
+        carried it as `portrait` front matter and the CSS for it survived the port
+        unused; publish-content.py now sends that front matter as the page's
+        feature image, which is where Ghost keeps such a thing. --}}
+  <div class="col page{{#if feature_image}} has-portrait{{/if}}">
+    {{#if feature_image}}
+      <img class="portrait" src="{{img_url feature_image size="s"}}"
+           alt="{{#if feature_image_alt}}{{feature_image_alt}}{{else}}{{title}}{{/if}}"
+           width="104" height="104">
+    {{/if}}
+    <div class="page-body">{{content}}</div>
+  </div>
+</article>
+{{/post}}

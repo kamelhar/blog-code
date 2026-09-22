@@ -1,0 +1,19 @@
+{
+  "name": "measured",
+  "description": "A notebook, not a landing page: the index is the page.",
+  "version": "1.0.0",
+  "engines": { "ghost": ">=5.0.0" },
+  "license": "MIT",
+  "author": { "name": "Federico Kamelhar", "email": "fede@kamelhar.net" },
+  "keywords": ["ghost-theme", "blog", "minimal", "typography"],
+  "config": {
+    "posts_per_page": 25,
+    "image_sizes": {
+      "s":  { "width": 320 },
+      "m":  { "width": 720 },
+      "l":  { "width": 1200 },
+      "xl": { "width": 2000 }
+    },
+    "card_assets": true
+  }
+}

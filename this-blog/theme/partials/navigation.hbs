@@ -1,0 +1,14 @@
+{{!-- Ghost renders navigation through the {{navigation}} helper, and the helper is
+      what puts the list into scope: a {{#foreach navigation}} written anywhere else
+      iterates nothing and fails silently, which is exactly how the About link and
+      the footer links went missing. Overriding this partial is how a theme keeps its
+      own markup -- bare <a> elements, no <ul>, because .nav and .foot-links lay their
+      children out directly.
+
+      Both lists arrive here. `isSecondary` tells them apart, and only the primary
+      one marks the current page: the footer is a list of elsewheres. --}}
+{{#foreach navigation}}
+  {{#if ../isSecondary}}<a href="{{url}}">{{> icon}}{{label}}</a>
+  {{else}}<a href="{{url}}"{{#if current}} aria-current="page"{{/if}}>{{label}}</a>
+  {{/if}}
+{{/foreach}}

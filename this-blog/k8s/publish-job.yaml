@@ -1,0 +1,77 @@
+# The writing goes into Ghost from here, once per sync.
+#
+# Ghost keeps posts and settings in MySQL, so neither can ride in the image the
+# way the theme does. kamelhar/blog builds a second image from the same commit,
+# blog-publish, with the two publish scripts and the Markdown they push, and this
+# runs it after Ghost is Ready: a PostSync hook, so the writing lands on the Ghost
+# that was just rolled and never on the one being replaced. Both scripts are
+# idempotent -- a post is updated by slug, a setting only when it differs -- so a
+# sync that changed nothing publishes nothing.
+#
+# It reaches Ghost on the Service, with the admin hostname as the Host header:
+# same three headers the scripts send through the tunnel, because Ghost picks the
+# admin surface by Host and redirects a plain-http admin call unless the proto is
+# declared. The overlay says which admin hostname.
+#
+# It signs in as the owner (settings refuse an integration token), with the login
+# from blog-publish, sealed per namespace. Ghost would answer a first sign-in from
+# a new pod with an emailed code, so ghost.yaml turns staff device verification
+# off: the admin name is behind authentik and the Service is not routable from
+# outside the cluster, which is what the code was standing in for.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: blog-publish
+  annotations:
+    # A tracked resource, not a PostSync hook, and the difference is the whole
+    # point. Argo does not diff hook resources -- it reports one as `status=None`
+    # -- so a hook only ever runs when something else in the application changed.
+    # That meant the writing could only be published by also rolling Ghost, and an
+    # attempt to bump the publisher's image alone left the application Synced with
+    # the hook never firing. Tracked, this Job is compared like anything else: a
+    # new publisher tag is a real diff, so it syncs, so the writing publishes --
+    # and Ghost is not touched.
+    #
+    # Wave 10 keeps the ordering the hook used to give. Argo finishes wave 0 and
+    # waits for it to report healthy before starting this one, so the publish runs
+    # against a Ghost that is already up rather than against one mid-rollout.
+    argocd.argoproj.io/sync-wave: "10"
+    # A Job's spec is immutable, so applying a new image over an existing Job is
+    # rejected by the API server. Replace deletes and recreates instead, which is
+    # what "run again with the new content" means here.
+    argocd.argoproj.io/sync-options: Replace=true
+spec:
+  backoffLimit: 2
+  # No ttlSecondsAfterFinished. A tracked Job that deletes itself is a resource
+  # Argo then sees as missing, so it would recreate it and republish on a timer
+  # -- harmless, since both scripts are idempotent, but a sync that flaps once a
+  # day for no reason is a bad thing to leave running. It stays until replaced.
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: blog-publish}
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: {type: RuntimeDefault}
+      imagePullSecrets: [{name: ghcr-pull}]
+      containers:
+        - name: publish
+          image: ghcr.io/kamelhar/blog-publish
+          env:
+            - {name: GHOST_ADMIN_URL, value: "http://blog:2368"}
+            - {name: GHOST_HOST_HEADER, value: "blog-admin.kamelhar.net"}
+          envFrom:
+            - secretRef: {name: blog-publish}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {memory: 256Mi}
+      volumes:
+        - {name: tmp, emptyDir: {}}

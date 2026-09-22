@@ -1,0 +1,148 @@
+# Ghost itself. Upstream image plus the theme, built by the blog repo - the only
+# thing of ours inside
+# is the "measured" theme, mounted from kamelhar/blog and activated once.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: blog-content
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: 4Gi}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blog
+spec:
+  replicas: 1
+  strategy: {type: Recreate}          # single RWO content volume
+  selector: {matchLabels: {app.kubernetes.io/name: blog}}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: blog}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile: {type: RuntimeDefault}
+      # ghcr.io/kamelhar is private, like every other image of ours here.
+      imagePullSecrets: [{name: ghcr-pull}]
+      # The theme ships inside the image at /opt/measured, but Ghost keeps content
+      # on a PVC mounted over /var/lib/ghost/content, and a mount masks whatever
+      # the image had underneath it. So it is copied in before Ghost starts.
+      #
+      # Same image as the container below, so one tag moves both: a theme change
+      # is a new sha, Argo rolls the deployment, and the copy runs again. Ghost
+      # reads a theme's files on boot, and which theme is active lives in MySQL --
+      # so this updates `measured` in place and never has to re-activate it.
+      initContainers:
+        - name: theme
+          image: ghcr.io/kamelhar/blog
+          command: ["sh", "-c"]
+          # A plain cp -a would leave files from a previous build that this one no
+          # longer has. Deleting the directory first makes the image the only
+          # source of what `measured` contains.
+          args:
+            - |
+              set -eu
+              dest=/var/lib/ghost/content/themes/measured
+              rm -rf "$dest"
+              mkdir -p "$dest"
+              cp -a /opt/measured/. "$dest"/
+              echo "theme synced: $(find "$dest" -type f | wc -l) files"
+          volumeMounts:
+            - {name: content, mountPath: /var/lib/ghost/content}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 128Mi}
+      containers:
+        - name: ghost
+          image: ghcr.io/kamelhar/blog
+          ports: [{name: http, containerPort: 2368}]
+          env:
+            - {name: NODE_ENV, value: production}
+            - {name: database__client, value: mysql}
+            - {name: database__connection__host, value: blog-mysql}
+            - {name: database__connection__user, value: ghost}
+            - {name: database__connection__database, value: ghost}
+            - name: database__connection__password
+              valueFrom: {secretKeyRef: {name: blog-db, key: password}}
+            # url must match the public name exactly or Ghost writes wrong
+            # links into posts and redirects admin to the wrong host
+            - {name: url, value: "https://blog.kamelhar.net"}
+            # Admin lives on its own name so Caddy can put authentik in front
+            # of it (sites.toml blog-admin) while the blog itself stays open.
+            # Gating the public name instead would mean opening every read
+            # path as an exception, which gates nothing.
+            - {name: admin__url, value: "https://blog-admin.kamelhar.net"}
+            # Ghost emails a 6-digit code to the owner the first time a staff sign-in
+            # arrives from a device it has not seen. The publish Job is a new pod every
+            # sync, and nobody is there to type the code. The admin name is behind
+            # authentik and the Service is cluster-only, which is the protection the
+            # code was a stand-in for.
+            - {name: security__staffDeviceVerification, value: "false"}
+            # Staff invites and password resets are email. Without this the
+            # only way back into a locked-out admin is the database.
+            - {name: mail__transport, value: SMTP}
+            # No `service`: naming a well-known service makes nodemailer apply that
+            # service's whole profile, and Resend's is implicit TLS on 465. The port
+            # below then survives while `secure` does not, which is TLS-on-connect
+            # against a STARTTLS port -- OpenSSL calls it "wrong version number" and
+            # Ghost reports ESOCKET with nothing about TLS in it. Host, port and
+            # secure, stated plainly, are the same connection with none of that.
+            - {name: mail__options__host, value: smtp.resend.com}
+            - {name: mail__options__port, value: "587"}
+            - {name: mail__options__secure, value: "false"}
+            - {name: mail__options__auth__user, value: resend}
+            - {name: mail__from, value: "blog@kamelhar.net"}
+            - name: mail__options__auth__pass
+              valueFrom: {secretKeyRef: {name: blog-mail, key: api-key}}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: content, mountPath: /var/lib/ghost/content}
+          resources:
+            requests: {cpu: 50m, memory: 512Mi}
+            limits: {memory: 1Gi}
+          # `url` is https, so Ghost 301s any request that does not say it arrived over
+          # TLS -- a probe on plain http never sees 200 and the pod never goes Ready.
+          # /ghost/* is worse: Ghost sends it to admin__url, another 301. The reader's
+          # page on / with the scheme declared is the thing worth probing anyway, and it
+          # answers 200 whatever Host the kubelet uses, so no overlay has to patch it.
+          startupProbe:
+            httpGet:
+              path: /
+              port: http
+              httpHeaders: [{name: X-Forwarded-Proto, value: https}]
+            failureThreshold: 60
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+              httpHeaders: [{name: X-Forwarded-Proto, value: https}]
+            failureThreshold: 3
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+              httpHeaders: [{name: X-Forwarded-Proto, value: https}]
+            failureThreshold: 3
+            periodSeconds: 30
+      volumes:
+        - name: content
+          persistentVolumeClaim: {claimName: blog-content}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: blog
+spec:
+  selector: {app.kubernetes.io/name: blog}
+  ports: [{name: http, port: 2368, targetPort: http}]

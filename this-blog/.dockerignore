@@ -1,0 +1,10 @@
+# Two images build from this context. The Ghost image takes only the theme; the
+# publisher (Dockerfile.publish) takes the writing and the scripts that push it.
+# Everything else -- the source figures are megabytes nothing in a container
+# reads, and the zip is a build output -- stays out of both.
+*
+!theme
+!content
+!scripts
+theme/**/.DS_Store
+scripts/__pycache__
