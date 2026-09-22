@@ -4,6 +4,7 @@ Everything behind
 [Running Local AI on a DGX Spark](https://blog.kamelhar.net/serving-an-llm-on-an-nvidia-dgx-spark/).
 
 ```
+LONG-FORM.md  the 7,000-word draft the published post was cut from
 bench/     llm-concurrency.py, a generic harness for any OpenAI-compatible
            endpoint, plus the two site-specific originals that produced the
            numbers in the article
